@@ -3,9 +3,10 @@ services:
     name: deepfake-model-api
     runtime: python-3.12
     buildCommand: pip install -r requirements.txt
-    startCommand: python -u model_api.py
+    startCommand: >
+      python -u model_api.py
     envVars:
       - key: PYTHON_VERSION
-        value: 3.12
+        value: '3.12'
       - key: PORT
-        value: 10000
+        value: '5000'
