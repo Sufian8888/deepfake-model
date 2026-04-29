@@ -25,7 +25,12 @@ seaborn>=0.13.0
 # Machine Learning
 scikit-learn>=1.5.0
 
+# API & Web
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.6
+requests==2.31.0
+
 # Utilities
 tqdm==4.66.1
-timm>=0.9.0
 python-dotenv==1.0.1
