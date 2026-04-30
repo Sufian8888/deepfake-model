@@ -108,24 +108,37 @@ def load_model(model_key: str | None = None):
     try:
         if device is None:
             device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-            print(f"Using device: {device}")
+            logger.info(f"Using device: {device}")
 
+        available_models = get_available_model_files()
+        logger.info(f"📁 Available models: {[m['key'] for m in available_models]}")
+        
         model_path = resolve_model_path(model_key)
 
         if model_path is None:
-            print("⚠️ No model files found in model_output")
-            print("⚠️ Running in demo mode with random predictions")
+            logger.error("⚠️ No model files found in model_output")
+            logger.warning("⚠️ Running in demo mode with random predictions")
             model = None
             loaded_model_key = None
             loaded_model_path = None
             return False
 
+        logger.info(f"🔍 Loading model from: {model_path}")
+
         if loaded_model_path == str(model_path) and model is not None:
+            logger.info(f"✅ Model already loaded: {model_path}")
             return True
 
+        logger.info(f"🏗️ Creating DeepfakeDetector architecture...")
         detector = DeepfakeDetector()
+        
+        logger.info(f"📦 Loading checkpoint: {model_path}")
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
+        logger.info(f"✅ Checkpoint loaded, extracting state dict...")
+        
         state_dict = extract_state_dict(checkpoint)
+        logger.info(f"🔄 Applying state dict ({len(state_dict)} parameters)...")
+        
         detector.load_state_dict(state_dict, strict=False)
         detector.to(device)
         detector.eval()
@@ -133,11 +146,11 @@ def load_model(model_key: str | None = None):
         model = detector
         loaded_model_key = model_path.stem
         loaded_model_path = str(model_path)
-        print(f"✅ Model loaded successfully from {model_path}")
+        logger.info(f"✅ Model loaded successfully from {model_path}")
         return True
     except Exception as e:
-        print(f"❌ Error loading model: {e}")
-        print("⚠️ Running in demo mode with random predictions")
+        logger.error(f"❌ Error loading model: {type(e).__name__}: {str(e)}", exc_info=True)
+        logger.warning("⚠️ Running in demo mode with random predictions")
         model = None
         loaded_model_key = None
         loaded_model_path = None
@@ -533,7 +546,7 @@ async def analyze_video_path(video_path: str, model_key: str = "final_model"):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 5000))
-    print("🚀 Starting Deepfake Detection Model API...")
-    print(f"📝 API will be available at: http://0.0.0.0:{port}")
-    print(f"📝 API Documentation: http://0.0.0.0:{port}/docs")
+    logger.info("🚀 Starting Deepfake Detection Model API...")
+    logger.info(f"📝 API will be available at: http://0.0.0.0:{port}")
+    logger.info(f"📝 API Documentation: http://0.0.0.0:{port}/docs")
     uvicorn.run(app, host="0.0.0.0", port=port)
