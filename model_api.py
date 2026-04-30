@@ -17,6 +17,11 @@ from pathlib import Path
 import os
 import tempfile
 from datetime import datetime
+import logging
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 try:
     from dotenv import load_dotenv
@@ -278,12 +283,16 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
     """Analyze video using the selected model."""
     global model, device, loaded_model_key
 
+    logger.info(f"🎬 Starting analysis for: {video_path}")
+
     # Switch model when requested by client.
     if model_key and model_key != loaded_model_key:
+        logger.info(f"🔄 Switching model to: {model_key}")
         load_model(model_key)
 
     if model is None:
         # Demo mode - return random results
+        logger.warning("⚠️ Model not loaded, using demo mode")
         import random
         is_fake = random.choice([True, False])
         confidence = random.uniform(60, 95)
@@ -305,13 +314,17 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
         }
     
     # Extract frames (these are RGB frames for processing)
+    logger.info("📹 Extracting frames...")
     frames = extract_frames(video_path)
+    logger.info(f"✅ Extracted {len(frames)} frames")
     
     # Extract raw frames again (BGR for OpenCV annotation)
+    logger.info("🎞️ Extracting raw frames for annotation...")
     raw_frames = []
     cap = cv2.VideoCapture(video_path)
     
     if not cap.isOpened():
+        logger.error(f"❌ Cannot open video: {video_path}")
         raise ValueError(f"Cannot open video: {video_path}")
     
     frame_count = 0
@@ -331,6 +344,7 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
         frame_count += 1
     
     cap.release()
+    logger.info(f"✅ Extracted {len(raw_frames)} raw frames")
     
     # Ensure we have the same number of frames
     if len(raw_frames) != len(frames):
@@ -339,13 +353,17 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
         frames = frames[:min_len]
     
     # Preprocess frames
+    logger.info("🔧 Preprocessing frames...")
     processed_frames = torch.stack([preprocess_frame(frame) for frame in frames])
     processed_frames = processed_frames.to(device)
+    logger.info(f"✅ Preprocessed frames shape: {processed_frames.shape}")
     
     # Run inference
+    logger.info("🧠 Running model inference...")
     with torch.no_grad():
         predictions = model(processed_frames)
         predictions = predictions.cpu().numpy().flatten()
+    logger.info(f"✅ Inference complete. Predictions: {predictions}")
     
     # Save annotated frames
     output_folder, annotated_paths, frame_details = save_annotated_frames(video_path, raw_frames, predictions)
@@ -426,8 +444,11 @@ async def analyze_video(
 ):
     """Analyze a video file for deepfake detection"""
     
+    logger.info(f"📹 Analyzing video: {file.filename} with model: {model_key}")
+    
     # Validate file type
     if not file.filename.lower().endswith(('.mp4', '.avi', '.mov', '.webm')):
+        logger.error(f"❌ Invalid file type: {file.filename}")
         raise HTTPException(status_code=400, detail="Invalid file type. Only video files are supported.")
     
     # Save uploaded file temporarily
@@ -436,25 +457,32 @@ async def analyze_video(
     
     try:
         # Save file
+        logger.info(f"💾 Saving temp file: {temp_path}")
         with open(temp_path, "wb") as f:
             content = await file.read()
             f.write(content)
+        logger.info(f"✅ Temp file saved: {len(content)} bytes")
         
         # Analyze video with selected model key
+        logger.info(f"🔍 Starting video analysis...")
         result = analyze_video_with_model(temp_path, model_key=model_key)
+        logger.info(f"✅ Analysis complete: {result['is_deepfake']}")
         
         return result
         
     except Exception as e:
+        logger.error(f"❌ Error analyzing video: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error analyzing video: {str(e)}")
     
     finally:
         # Cleanup
+        logger.info(f"🧹 Cleaning up temp file: {temp_path}")
         if os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"❌ Error deleting temp file: {e}")
+
 
 @app.post("/analyze-path")
 async def analyze_video_path(video_path: str, model_key: str = "final_model"):
