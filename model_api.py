@@ -463,12 +463,30 @@ async def analyze_video(
             f.write(content)
         logger.info(f"✅ Temp file saved: {len(content)} bytes")
         
-        # Analyze video with selected model key
-        logger.info(f"🔍 Starting video analysis...")
-        result = analyze_video_with_model(temp_path, model_key=model_key)
-        logger.info(f"✅ Analysis complete: {result['is_deepfake']}")
-        
-        return result
+        try:
+            # Analyze video with selected model key
+            logger.info(f"🔍 Starting video analysis...")
+            result = analyze_video_with_model(temp_path, model_key=model_key)
+            logger.info(f"✅ Analysis complete: deepfake={result['is_deepfake']}")
+            
+            # Ensure result can be serialized
+            import json
+            json_test = json.dumps(result)
+            logger.info(f"✅ Result is valid JSON: {len(json_test)} bytes")
+            
+            return result
+        except MemoryError as e:
+            logger.error(f"❌ Out of memory: {str(e)}")
+            # Return error response instead of crashing
+            return {
+                "is_deepfake": False,
+                "confidence_score": 0.0,
+                "error": "Model ran out of memory",
+                "analysis_details": {"mode": "error", "reason": "memory"}
+            }
+        except Exception as e:
+            logger.error(f"❌ Analysis error: {type(e).__name__}: {str(e)}", exc_info=True)
+            raise
         
     except Exception as e:
         logger.error(f"❌ Error analyzing video: {str(e)}", exc_info=True)
@@ -480,6 +498,7 @@ async def analyze_video(
         if os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
+                logger.info(f"✅ Temp file deleted")
             except Exception as e:
                 logger.error(f"❌ Error deleting temp file: {e}")
 
