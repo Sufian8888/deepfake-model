@@ -291,8 +291,19 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
         load_model(model_key)
 
     if model is None:
-        # Demo mode - return random results
+        # Demo mode - but still extract frames for stats
         logger.warning("⚠️ Model not loaded, using demo mode")
+        
+        # Try to extract frames for analysis
+        try:
+            logger.info("📹 Extracting frames for demo mode...")
+            frames = extract_frames(video_path)
+            logger.info(f"✅ Extracted {len(frames)} frames")
+            num_extracted_frames = len(frames)
+        except Exception as e:
+            logger.error(f"❌ Cannot extract frames: {str(e)}")
+            num_extracted_frames = 0
+        
         import random
         is_fake = random.choice([True, False])
         confidence = random.uniform(60, 95)
@@ -302,12 +313,15 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
             "confidence_score": confidence,
             "analysis_details": {
                 "mode": "demo",
+                "reason": "Model not loaded on server",
                 "facial_consistency": random.uniform(50, 95),
                 "audio_sync": random.uniform(50, 95),
                 "artifacts_detected": random.choice([True, False]),
                 "frame_analysis": {
-                    "total_frames": random.randint(100, 500),
-                    "suspicious_frames": random.randint(0, 50)
+                    "total_frames": num_extracted_frames,
+                    "suspicious_frames": random.randint(0, max(1, num_extracted_frames // 2)),
+                    "fake_frames": random.randint(0, max(1, num_extracted_frames // 2)),
+                    "real_frames": random.randint(0, max(1, num_extracted_frames // 2))
                 },
                 "annotated_frames": []
             }
