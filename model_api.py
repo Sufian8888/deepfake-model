@@ -321,6 +321,30 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
         is_fake = random.choice([True, False])
         confidence = random.uniform(60, 95)
         
+        # Build frame-level demo data
+        fake_count = random.randint(0, max(1, num_extracted_frames // 2))
+        real_count = random.randint(0, max(1, num_extracted_frames // 2))
+        suspicious_count = random.randint(0, max(1, num_extracted_frames // 2))
+        
+        frame_details_demo = [
+            {
+                "frame_number": i,
+                "timestamp": float(i / 30.0),
+                "is_fake": random.choice([True, False]),
+                "is_suspicious": random.choice([True, False]),
+                "confidence_score": random.uniform(40, 95),
+            }
+            for i in range(num_extracted_frames)
+        ]
+        
+        frame_analysis_demo = {
+            "total_frames": num_extracted_frames,
+            "fake_frames": fake_count,
+            "real_frames": real_count,
+            "suspicious_frames": suspicious_count,
+            "frame_details": frame_details_demo
+        }
+        
         return {
             "is_deepfake": is_fake,
             "confidence_score": confidence,
@@ -330,14 +354,9 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
                 "facial_consistency": random.uniform(50, 95),
                 "audio_sync": random.uniform(50, 95),
                 "artifacts_detected": random.choice([True, False]),
-                "frame_analysis": {
-                    "total_frames": num_extracted_frames,
-                    "suspicious_frames": random.randint(0, max(1, num_extracted_frames // 2)),
-                    "fake_frames": random.randint(0, max(1, num_extracted_frames // 2)),
-                    "real_frames": random.randint(0, max(1, num_extracted_frames // 2))
-                },
-                "annotated_frames": []
-            }
+                "frame_analysis": frame_analysis_demo
+            },
+            "frame_analysis": frame_analysis_demo
         }
     
     # Extract frames (these are RGB frames for processing)
@@ -428,11 +447,32 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
         "output_folder": output_folder
     }
     
+    # Build frame-level analysis for database storage
+    frame_analysis_db = {
+        "total_frames": len(frames),
+        "fake_frames": fake_frames,
+        "real_frames": real_frames,
+        "suspicious_frames": suspicious_count,
+        "frame_details": [
+            {
+                "frame_number": idx,
+                "timestamp": float(idx / 30.0),  # Assuming 30 FPS
+                "is_fake": bool(predictions[idx] > 0.5),
+                "is_suspicious": bool(predictions[idx] > 0.5),
+                "confidence_score": float(predictions[idx] * 100 if predictions[idx] > 0.5 else (1 - predictions[idx]) * 100),
+                "analysis_details": frame_details[idx] if idx < len(frame_details) else {}
+            }
+            for idx in range(len(frames))
+        ]
+    }
+    
     return {
         "is_deepfake": is_deepfake,
         "confidence_score": confidence_score,
-        "analysis_details": analysis_details
+        "analysis_details": analysis_details,
+        "frame_analysis": frame_analysis_db
     }
+
 
 @app.get("/")
 async def root():
