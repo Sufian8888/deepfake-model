@@ -174,7 +174,7 @@ analysis_results_dir = os.path.join(os.path.dirname(__file__), 'analysis_results
 os.makedirs(analysis_results_dir, exist_ok=True)
 app.mount("/model/analysis_results", StaticFiles(directory=analysis_results_dir), name="analysis_results")
 
-def extract_frames(video_path, num_frames=10, frame_rate=15):
+def extract_frames(video_path, num_frames=5, frame_rate=30):
     """Extract frames from video"""
     frames = []
     cap = cv2.VideoCapture(video_path)
@@ -329,8 +329,8 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
     
     frame_count = 0
     extracted = 0
-    num_frames = 10
-    frame_rate = 15
+    num_frames = 5  # Reduced from 10 to 5 to save memory
+    frame_rate = 30  # Increased from 15 to 30 (skip more frames)
     
     while extracted < num_frames:
         ret, frame = cap.read()
