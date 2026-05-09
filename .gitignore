@@ -22,5 +22,21 @@ test-1.mp4
 .vscode/
 .idea/
 .DS_Store
-Thumbs.db
+Thumbs.dbcd /home/msufian/Documents/7thFyp/model
+
+# Remove the large files from git's cache (but keep them locally)
+git rm --cached model_output/deepfake_master_model*.pth
+
+# Ensure .gitattributes is committed
+git add .gitattributes
+git commit -m "Ensure .gitattributes for LFS"
+
+# Now re-add the model files (LFS will track them)
+git add model_output/deepfake_master_model*.pth test_model(new).py
+
+# Commit
+git commit -m "Add models with LFS"
+
+# Push
+git push -u origin main
 test_model(new).py
