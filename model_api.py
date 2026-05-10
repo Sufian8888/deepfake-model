@@ -29,6 +29,14 @@ try:
 except ImportError:
     pass
 
+# Reduce default Torch thread usage to lower memory/CPU pressure on small instances
+try:
+    import torch
+    torch.set_num_threads(2)
+    torch.set_num_interop_threads(1)
+except Exception:
+    pass
+
 # Model architecture (must match training)
 class DeepfakeDetector(nn.Module):
     def __init__(self):
@@ -375,8 +383,8 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
     
     frame_count = 0
     extracted = 0
-    num_frames = 5  # Reduced from 10 to 5 to save memory
-    frame_rate = 30  # Increased from 15 to 30 (skip more frames)
+    num_frames = 3  # Reduce frames to lower memory footprint
+    frame_rate = 60  # Skip more frames to keep extraction light
     
     while extracted < num_frames:
         ret, frame = cap.read()
@@ -404,12 +412,16 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
     processed_frames = processed_frames.to(device)
     logger.info(f"✅ Preprocessed frames shape: {processed_frames.shape}")
     
-    # Run inference
+    # Run inference (guarded)
     logger.info("🧠 Running model inference...")
-    with torch.no_grad():
-        predictions = model(processed_frames)
-        predictions = predictions.cpu().numpy().flatten()
-    logger.info(f"✅ Inference complete. Predictions: {predictions}")
+    try:
+        with torch.no_grad():
+            predictions = model(processed_frames)
+            predictions = predictions.cpu().numpy().flatten()
+        logger.info(f"✅ Inference complete. Predictions: {predictions}")
+    except Exception as e:
+        logger.error(f"❌ Inference failed: {type(e).__name__}: {e}", exc_info=True)
+        raise
     
     # Save annotated frames
     output_folder, annotated_paths, frame_details = save_annotated_frames(video_path, raw_frames, predictions)
