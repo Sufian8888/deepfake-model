@@ -7,6 +7,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
+import asyncio
 import torch
 import cv2
 import numpy as np
@@ -165,13 +166,22 @@ def load_model(model_key: str | None = None):
         return False
 
 
-# Load model on startup
+# Load model on startup (load in background to avoid long blocking startup)
+async def _async_load_model(default_key: str | None):
+    try:
+        await asyncio.to_thread(load_model, default_key)
+    except Exception:
+        logger.exception("Failed to load model in background")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    load_model(os.getenv("DEFAULT_MODEL_KEY", "final_model"))
+    # Start background model loading so server can bind to port immediately
+    default_key = os.getenv("DEFAULT_MODEL_KEY", "final_model")
+    logger.info(f"🔁 Scheduling background model load: {default_key}")
+    asyncio.create_task(_async_load_model(default_key))
     yield
-    # Shutdown
+    # Shutdown (no-op)
     pass
 
 # Create FastAPI app
