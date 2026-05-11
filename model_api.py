@@ -38,7 +38,7 @@ try:
 except Exception:
     pass
 
-# Model architecture (must match training)
+# Model architectures must match the checkpoint that is being loaded.
 class DeepfakeDetector(nn.Module):
     def __init__(self):
         super(DeepfakeDetector, self).__init__()
@@ -58,6 +58,15 @@ class DeepfakeDetector(nn.Module):
         features = self.backbone(x)
         output = self.classifier(features)
         return output
+
+
+class ConvNeXtDetector(nn.Module):
+    def __init__(self, num_classes=6):
+        super(ConvNeXtDetector, self).__init__()
+        self.backbone = timm.create_model('convnext_tiny', pretrained=False, num_classes=num_classes)
+
+    def forward(self, x):
+        return self.backbone(x)
 
 # Global model runtime state
 model = None
@@ -110,6 +119,38 @@ def extract_state_dict(checkpoint):
     return checkpoint
 
 
+def infer_model_architecture(model_key: str | None, state_dict: dict) -> str:
+    """Infer checkpoint architecture from the model key or checkpoint tensor names."""
+    if model_key and "deepfake_master_model" in model_key:
+        return "convnext_tiny"
+
+    state_keys = list(state_dict.keys())
+    if any(key.startswith(("stages.", "downsample_layers.", "head.")) for key in state_keys):
+        return "convnext_tiny"
+
+    return "efficientnet_b0"
+
+
+def infer_num_classes(architecture: str, state_dict: dict) -> int:
+    """Infer classifier width from the checkpoint tensors."""
+    candidate_keys = ["head.weight", "head.fc.weight", "classifier.6.weight", "classifier.weight"]
+    for key in candidate_keys:
+        tensor = state_dict.get(key)
+        if tensor is not None and hasattr(tensor, "shape") and len(tensor.shape) > 0:
+            return int(tensor.shape[0])
+
+    return 6 if architecture == "convnext_tiny" else 1
+
+
+def build_detector(architecture: str, num_classes: int):
+    if architecture == "convnext_tiny":
+        logger.info(f"🏗️ Creating ConvNeXtDetector architecture with {num_classes} classes...")
+        return ConvNeXtDetector(num_classes=num_classes)
+
+    logger.info("🏗️ Creating DeepfakeDetector architecture...")
+    return DeepfakeDetector()
+
+
 def load_model(model_key: str | None = None):
     """Load selected trained model checkpoint into memory."""
     global model, device, loaded_model_key, loaded_model_path
@@ -138,22 +179,23 @@ def load_model(model_key: str | None = None):
             logger.info(f"✅ Model already loaded: {model_path}")
             return True
 
-        logger.info(f"🏗️ Creating DeepfakeDetector architecture...")
-        detector = DeepfakeDetector()
-        
         logger.info(f"📦 Loading checkpoint: {model_path}")
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
         logger.info(f"✅ Checkpoint loaded, extracting state dict...")
         
         state_dict = extract_state_dict(checkpoint)
+        architecture = infer_model_architecture(model_key, state_dict)
+        num_classes = infer_num_classes(architecture, state_dict)
+        logger.info(f"🔎 Inferred architecture: {architecture}, num_classes: {num_classes}")
+
+        detector = build_detector(architecture, num_classes)
         logger.info(f"🔄 Applying state dict ({len(state_dict)} parameters)...")
-        
-        detector.load_state_dict(state_dict, strict=False)
+        detector.load_state_dict(state_dict, strict=True)
         detector.to(device)
         detector.eval()
 
         model = detector
-        loaded_model_key = model_path.stem
+        loaded_model_key = model_key or model_path.stem
         loaded_model_path = str(model_path)
         logger.info(f"✅ Model loaded successfully from {model_path}")
         return True
@@ -177,7 +219,7 @@ async def _async_load_model(default_key: str | None):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Start background model loading so server can bind to port immediately
-    default_key = os.getenv("DEFAULT_MODEL_KEY", "final_model")
+    default_key = os.getenv("DEFAULT_MODEL_KEY", "deepfake_master_model")
     logger.info(f"🔁 Scheduling background model load: {default_key}")
     asyncio.create_task(_async_load_model(default_key))
     yield
