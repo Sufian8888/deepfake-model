@@ -76,18 +76,30 @@ loaded_model_path = None
 
 
 def get_available_model_files():
-    """Return available checkpoint files in model_output as {key, label, path}."""
-    model_dir = Path(__file__).parent / "model_output"
-    if not model_dir.exists():
-        return []
-
+    """Return available checkpoint files in model_output or root directory as {key, label, path}."""
     files = []
-    for pth_file in sorted(model_dir.glob("*.pth")):
-        files.append({
-            "key": pth_file.stem,
-            "label": pth_file.name,
-            "path": pth_file,
-        })
+    
+    # Check model_output subdirectory first (local development)
+    model_dir = Path(__file__).parent / "model_output"
+    if model_dir.exists():
+        for pth_file in sorted(model_dir.glob("*.pth")):
+            files.append({
+                "key": pth_file.stem,
+                "label": pth_file.name,
+                "path": pth_file,
+            })
+    
+    # Also check root directory (Hugging Face Spaces deployment)
+    root_dir = Path(__file__).parent
+    for pth_file in sorted(root_dir.glob("*.pth")):
+        # Avoid duplicates
+        if not any(f["path"] == pth_file for f in files):
+            files.append({
+                "key": pth_file.stem,
+                "label": pth_file.name,
+                "path": pth_file,
+            })
+    
     return files
 
 
