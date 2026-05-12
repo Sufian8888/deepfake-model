@@ -477,6 +477,11 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
     
     # Save annotated frames
     output_folder, annotated_paths, frame_details = save_annotated_frames(video_path, raw_frames, predictions)
+    logger.info(f"✅ Saved {len(annotated_paths)} annotated frames to {output_folder}")
+    
+    # Log frame paths for debugging
+    for i, path in enumerate(annotated_paths):
+        logger.info(f"   Frame {i+1}: {path}")
     
     # Calculate metrics
     avg_prediction = float(np.mean(predictions))
@@ -507,7 +512,10 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
             "frame_scores": predictions.tolist(),
             "frame_details": frame_details
         },
-        "annotated_frames": [os.path.relpath(p, os.path.dirname(os.path.dirname(__file__))) for p in annotated_paths],
+        "annotated_frames": [
+            "/model/analysis_results/" + os.path.relpath(p, os.path.join(os.path.dirname(__file__), "analysis_results")).replace("\\", "/")
+            for p in annotated_paths
+        ],
         "output_folder": output_folder
     }
     

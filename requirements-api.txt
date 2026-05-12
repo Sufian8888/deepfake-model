@@ -1,5 +1,19 @@
+# API Framework
 fastapi==0.104.1
 uvicorn==0.24.0
 python-multipart==0.0.6
 requests==2.31.0
 python-dotenv==1.0.1
+
+# Core ML Libraries
+numpy>=2.1.0
+torch>=2.2.0
+torchvision>=0.17.0
+timm>=0.9.0
+
+# Computer Vision
+opencv-python-headless>=4.10.0
+scikit-image>=0.24.0
+
+# Utilities
+Pillow>=10.0.0
