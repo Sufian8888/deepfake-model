@@ -23,10 +23,10 @@ RUN mkdir -p analysis_results
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
-ENV PORT=5000
+ENV PORT=7860
 
 # Expose port
-EXPOSE 5000
+EXPOSE 7860
 
 # Start application
-CMD ["uvicorn", "model_api:app", "--host", "0.0.0.0", "--port", "5000", "--proxy-headers"]
+CMD ["uvicorn", "model_api:app", "--host", "0.0.0.0", "--port", "7860", "--proxy-headers"]
