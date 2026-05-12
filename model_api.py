@@ -131,6 +131,24 @@ def extract_state_dict(checkpoint):
     return checkpoint
 
 
+def remap_state_dict_keys(state_dict: dict) -> dict:
+    """Fix state dict key mismatch by adding/removing 'backbone.' prefix."""
+    # Check if keys need 'backbone.' prefix added
+    if state_dict and not any(k.startswith("backbone.") for k in list(state_dict.keys())[:5]):
+        # Keys don't have 'backbone.' prefix, add it
+        logger.info("🔄 Remapping state dict: adding 'backbone.' prefix to keys...")
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            # Skip head keys that don't need prefix
+            if key.startswith("head."):
+                new_state_dict[key] = value
+            else:
+                new_state_dict[f"backbone.{key}"] = value
+        return new_state_dict
+    
+    return state_dict
+
+
 def infer_model_architecture(model_key: str | None, state_dict: dict) -> str:
     """Infer checkpoint architecture from the model key or checkpoint tensor names."""
     if model_key and "deepfake_master_model" in model_key:
@@ -196,6 +214,7 @@ def load_model(model_key: str | None = None):
         logger.info(f"✅ Checkpoint loaded, extracting state dict...")
         
         state_dict = extract_state_dict(checkpoint)
+        state_dict = remap_state_dict_keys(state_dict)  # Fix key mismatch
         architecture = infer_model_architecture(model_key, state_dict)
         num_classes = infer_num_classes(architecture, state_dict)
         logger.info(f"🔎 Inferred architecture: {architecture}, num_classes: {num_classes}")
