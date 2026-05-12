@@ -414,7 +414,8 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
                 "facial_consistency": random.uniform(50, 95),
                 "audio_sync": random.uniform(50, 95),
                 "artifacts_detected": random.choice([True, False]),
-                "frame_analysis": frame_analysis_demo
+                "frame_analysis": frame_analysis_demo,
+                "annotated_frames": []  # Empty in demo mode
             },
             "frame_analysis": frame_analysis_demo
         }
@@ -584,6 +585,19 @@ async def analyze_video(
     """Analyze a video file for deepfake detection"""
     
     logger.info(f"📹 Analyzing video: {file.filename} with model: {model_key}")
+    
+    # WAIT for model to load if not already loaded
+    global model, loaded_model_key
+    if model is None:
+        logger.warning(f"⏳ Model not loaded yet. Waiting...")
+        for attempt in range(30):  # Wait up to 30 seconds
+            if model is not None:
+                logger.info(f"✅ Model loaded after {attempt} attempts")
+                break
+            await asyncio.sleep(1)
+        
+        if model is None:
+            logger.error(f"❌ Model still not loaded after 30 seconds. Proceeding with demo mode.")
     
     # Validate file type
     if not file.filename.lower().endswith(('.mp4', '.avi', '.mov', '.webm')):
