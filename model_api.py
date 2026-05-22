@@ -624,10 +624,9 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
                 # Preprocess frame
                 tensor = preprocess_frame(frame).unsqueeze(0).to(device)
                 
-                # GradCAM - exactly like test_model.py
-                model.train()
+                # GradCAM - model stays in eval() for consistent predictions
+                # Gradients flow even in eval mode - we don't need train mode for this
                 cam, probs = gradcam.generate(tensor)
-                model.eval()
                 
                 # Store results
                 gradcam_maps.append(cam)
