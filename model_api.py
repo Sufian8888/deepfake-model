@@ -614,7 +614,7 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
     logger.info("📊 Initializing Grad-CAM for heatmap generation...")
     gradcam = GradCAM(model)
     gradcam_maps = []
-    frame_results_list = []
+    raw_outputs_list = []
     
     # Process each frame - following test_model.py exactly
     logger.info("🧠 Running model inference with Grad-CAM for each frame...")
@@ -628,9 +628,13 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
                 # Gradients flow even in eval mode - we don't need train mode for this
                 cam, probs = gradcam.generate(tensor)
                 
-                # Store results
+                # Get raw model output (NOT softmaxed)
+                with torch.no_grad():
+                    raw_output = model(tensor).cpu()
+                    raw_outputs_list.append(raw_output)
+                
+                # Store heatmap
                 gradcam_maps.append(cam)
-                frame_results_list.append(probs)
                 logger.info(f"   ✅ Frame {i+1}/{len(frames)}: Grad-CAM computed")
                 
             except Exception as e:
@@ -638,11 +642,11 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
                 gradcam_maps.append(None)
                 with torch.no_grad():
                     tensor = preprocess_frame(frame).unsqueeze(0).to(device)
-                    output = model(tensor)
-                    frame_results_list.append(torch.softmax(output, dim=1)[0].cpu().numpy())
+                    output = model(tensor).cpu()
+                    raw_outputs_list.append(output)
         
-        # Combine all outputs
-        raw_outputs = torch.tensor(np.stack(frame_results_list))
+        # Combine all outputs - RAW outputs, not softmaxed!
+        raw_outputs = torch.cat(raw_outputs_list, dim=0)
         fake_probabilities, predicted_class_names, predicted_classes, class_probabilities = normalize_model_outputs(
             raw_outputs,
             loaded_model_architecture,
