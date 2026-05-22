@@ -391,18 +391,33 @@ class GradCAM:
         cam = torch.relu(cam)
         cam = cam.cpu().numpy()
         
+        # Debug logging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"🔍 CAM stats - min: {cam.min():.4f}, max: {cam.max():.4f}, mean: {cam.mean():.4f}")
+        
         if cam.max() > 0:
             cam = (cam - cam.min()) / (cam.max() - cam.min())
+            logger.info(f"✅ CAM normalized to [0, 1]")
+        else:
+            logger.warning(f"⚠️ CAM is all zeros after ReLU!")
         
         # Return both cam and probs like test_model.py
         return cam, torch.softmax(output, dim=1)[0].detach().cpu().numpy()
 
 def overlay_gradcam(frame_bgr, cam):
     """Overlay Grad-CAM heatmap on frame"""
+    import logging
+    logger = logging.getLogger(__name__)
+    
     h, w = frame_bgr.shape[:2]
     cam_resized = cv2.resize(cam, (w, h))
+    logger.info(f"🎨 Overlay CAM - frame: {frame_bgr.shape}, cam resized: {cam_resized.shape}, cam stats: min={cam_resized.min():.4f}, max={cam_resized.max():.4f}")
+    
     heatmap_colored = cv2.applyColorMap((cam_resized * 255).astype(np.uint8), cv2.COLORMAP_JET)
-    return cv2.addWeighted(frame_bgr, 0.55, heatmap_colored, 0.45, 0)
+    result = cv2.addWeighted(frame_bgr, 0.55, heatmap_colored, 0.45, 0)
+    logger.info(f"✅ Heatmap overlay applied successfully")
+    return result
 
 def save_annotated_frames(video_path, raw_frames, fake_probabilities, predicted_class_names=None, gradcam_maps=None):
     """Save annotated frames with face detection and Grad-CAM heatmap overlay"""
