@@ -375,7 +375,7 @@ class GradCAM:
         self.gradients = grad_output[0].detach()
     
     def generate(self, x, class_idx=None):
-        """Generate Grad-CAM heatmap"""
+        """Generate Grad-CAM heatmap - returns (cam, probs) like test_model.py"""
         self.model.eval()
         output = self.model(x)
         
@@ -383,20 +383,19 @@ class GradCAM:
             class_idx = output.argmax(dim=1).item()
         
         self.model.zero_grad()
-        output[0, class_idx].backward(retain_graph=True)
+        output[0, class_idx].backward()
         
-        # Compute heatmap
-        if self.gradients is not None and self.activations is not None:
-            grads = self.gradients.mean(dim=[2, 3], keepdim=True)
-            cam = (grads * self.activations).sum(dim=1).squeeze()
-            cam = torch.relu(cam)
-            cam = cam.cpu().detach().numpy()
-            
-            if cam.max() > 0:
-                cam = (cam - cam.min()) / (cam.max() - cam.min())
-            return cam
+        # Heatmap banao - exactly like test_model.py
+        grads = self.gradients.mean(dim=[2, 3], keepdim=True)
+        cam = (grads * self.activations).sum(dim=1).squeeze()
+        cam = torch.relu(cam)
+        cam = cam.cpu().numpy()
         
-        return np.zeros((x.shape[2] // 32, x.shape[3] // 32))
+        if cam.max() > 0:
+            cam = (cam - cam.min()) / (cam.max() - cam.min())
+        
+        # Return both cam and probs like test_model.py
+        return cam, torch.softmax(output, dim=1)[0].detach().cpu().numpy()
 
 def overlay_gradcam(frame_bgr, cam):
     """Overlay Grad-CAM heatmap on frame"""
@@ -591,44 +590,42 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
     logger.info("📊 Initializing Grad-CAM for heatmap generation...")
     gradcam = GradCAM(model)
     gradcam_maps = []
-    raw_outputs_list = []
+    frame_results_list = []
     
-    # Process each frame for inference + Grad-CAM
+    # Process each frame - following test_model.py exactly
     logger.info("🧠 Running model inference with Grad-CAM for each frame...")
     try:
         for i, frame in enumerate(frames):
             try:
-                # Preprocess single frame
-                frame_tensor = preprocess_frame(frame)
-                frame_batch = frame_tensor.unsqueeze(0).to(device)
+                # Preprocess frame
+                tensor = preprocess_frame(frame).unsqueeze(0).to(device)
                 
-                # Run inference with gradient tracking enabled
-                with torch.set_grad_enabled(True):
-                    output = model(frame_batch)
-                    raw_outputs_list.append(output.detach().cpu())
+                # GradCAM - exactly like test_model.py
+                model.train()
+                cam, probs = gradcam.generate(tensor)
+                model.eval()
                 
-                # Compute Grad-CAM with backward pass
-                cam = gradcam.generate(frame_batch)
+                # Store results
                 gradcam_maps.append(cam)
-                logger.info(f"   ✅ Frame {i+1}/{len(frames)}: inference + Grad-CAM")
+                frame_results_list.append(probs)
+                logger.info(f"   ✅ Frame {i+1}/{len(frames)}: Grad-CAM computed")
                 
             except Exception as e:
                 logger.warning(f"   ⚠️ Frame {i+1} failed: {str(e)}")
                 gradcam_maps.append(None)
                 with torch.no_grad():
-                    frame_tensor = preprocess_frame(frame)
-                    frame_batch = frame_tensor.unsqueeze(0).to(device)
-                    output = model(frame_batch)
-                    raw_outputs_list.append(output.detach().cpu())
+                    tensor = preprocess_frame(frame).unsqueeze(0).to(device)
+                    output = model(tensor)
+                    frame_results_list.append(torch.softmax(output, dim=1)[0].cpu().numpy())
         
-        # Combine outputs
-        raw_outputs = torch.cat(raw_outputs_list, dim=0)
+        # Combine all outputs
+        raw_outputs = torch.tensor(np.stack(frame_results_list))
         fake_probabilities, predicted_class_names, predicted_classes, class_probabilities = normalize_model_outputs(
             raw_outputs,
             loaded_model_architecture,
         )
         predictions = fake_probabilities.numpy().flatten()
-        logger.info(f"✅ Inference + Grad-CAM complete for {len(frames)} frames")
+        logger.info(f"✅ Processed {len(frames)} frames with Grad-CAM heatmaps")
         
     except Exception as e:
         logger.error(f"❌ Processing failed: {type(e).__name__}: {e}", exc_info=True)
