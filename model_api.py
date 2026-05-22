@@ -424,7 +424,7 @@ def save_annotated_frames(video_path, raw_frames, fake_probabilities, predicted_
     
     for i, (raw_frame, fake_prob) in enumerate(zip(raw_frames, fake_probabilities)):
         # Start with Grad-CAM overlay if available
-        if gradcam_maps is not None and i < len(gradcam_maps):
+        if gradcam_maps is not None and i < len(gradcam_maps) and gradcam_maps[i] is not None:
             annotated = overlay_gradcam(raw_frame, gradcam_maps[i])
         else:
             annotated = raw_frame.copy()
