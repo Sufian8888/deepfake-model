@@ -73,6 +73,11 @@ model = None
 device = None
 loaded_model_key = None
 loaded_model_path = None
+loaded_model_architecture = None
+
+CLASS_NAMES_6 = ['Deepfakes', 'Face2Face', 'FaceShifter', 'FaceSwap', 'NeuralTextures', 'original']
+FAKE_CLASS_NAMES_6 = set(CLASS_NAMES_6[:-1])
+REAL_CLASS_NAMES_6 = {CLASS_NAMES_6[-1]}
 
 
 def get_available_model_files():
@@ -168,6 +173,39 @@ def infer_num_classes(architecture: str, state_dict: dict) -> int:
     return 6 if architecture == "convnext_tiny" else 1
 
 
+def normalize_model_outputs(outputs: torch.Tensor, architecture: str | None):
+    """Convert raw model outputs into fake probabilities, predicted classes, and confidence values."""
+    if outputs.ndim == 0:
+        outputs = outputs.view(1)
+
+    if outputs.ndim == 1:
+        outputs = outputs.unsqueeze(-1)
+
+    # Multi-class ConvNeXt checkpoints should use softmax and map the last class to real.
+    if outputs.ndim == 2 and outputs.shape[-1] > 1:
+        probabilities = torch.softmax(outputs, dim=-1)
+        predicted_classes = torch.argmax(probabilities, dim=-1)
+
+        if probabilities.shape[-1] == 6:
+            fake_probabilities = probabilities[:, :5].sum(dim=-1)
+            predicted_class_names = [CLASS_NAMES_6[idx] for idx in predicted_classes.tolist()]
+            return fake_probabilities, predicted_class_names, predicted_classes, probabilities
+
+        frame_confidence, _ = torch.max(probabilities, dim=-1)
+        predicted_class_names = [str(idx) for idx in predicted_classes.tolist()]
+        return frame_confidence, predicted_class_names, predicted_classes, probabilities
+
+    scores = outputs.squeeze(-1)
+
+    # Binary checkpoints may already emit probabilities via Sigmoid; only sigmoid raw logits.
+    if torch.any((scores < 0) | (scores > 1)):
+        scores = torch.sigmoid(scores)
+
+    scores = torch.clamp(scores, 0.0, 1.0)
+    predicted_class_names = ["fake" if float(score) >= 0.5 else "real" for score in scores.tolist()]
+    return scores, predicted_class_names, None, None
+
+
 def build_detector(architecture: str, num_classes: int):
     if architecture == "convnext_tiny":
         logger.info(f"🏗️ Creating ConvNeXtDetector architecture with {num_classes} classes...")
@@ -179,7 +217,7 @@ def build_detector(architecture: str, num_classes: int):
 
 def load_model(model_key: str | None = None):
     """Load selected trained model checkpoint into memory."""
-    global model, device, loaded_model_key, loaded_model_path
+    global model, device, loaded_model_key, loaded_model_path, loaded_model_architecture
 
     try:
         if device is None:
@@ -197,6 +235,7 @@ def load_model(model_key: str | None = None):
             model = None
             loaded_model_key = None
             loaded_model_path = None
+            loaded_model_architecture = None
             return False
 
         logger.info(f"🔍 Loading model from: {model_path}")
@@ -224,6 +263,7 @@ def load_model(model_key: str | None = None):
         model = detector
         loaded_model_key = model_key or model_path.stem
         loaded_model_path = str(model_path)
+        loaded_model_architecture = architecture
         logger.info(f"✅ Model loaded successfully from {model_path}")
         return True
     except Exception as e:
@@ -232,6 +272,7 @@ def load_model(model_key: str | None = None):
         model = None
         loaded_model_key = None
         loaded_model_path = None
+        loaded_model_architecture = None
         return False
 
 
@@ -274,7 +315,7 @@ analysis_results_dir = os.path.join(os.path.dirname(__file__), 'analysis_results
 os.makedirs(analysis_results_dir, exist_ok=True)
 app.mount("/model/analysis_results", StaticFiles(directory=analysis_results_dir), name="analysis_results")
 
-def extract_frames(video_path, num_frames=5, frame_rate=30):
+def extract_frames(video_path, num_frames=15, frame_rate=30):
     """Extract frames from video"""
     frames = []
     cap = cv2.VideoCapture(video_path)
@@ -314,8 +355,58 @@ def preprocess_frame(frame):
     ])
     return transform(frame)
 
-def save_annotated_frames(video_path, raw_frames, predictions):
-    """Save annotated frames with face detection"""
+class GradCAM:
+    """Grad-CAM implementation for ConvNeXt models"""
+    def __init__(self, model):
+        self.model = model
+        self.gradients = None
+        self.activations = None
+        
+        # Hook into the last stage of ConvNeXt
+        if hasattr(model, 'stages'):
+            target = model.stages[-1]
+            target.register_forward_hook(self._save_activation)
+            target.register_full_backward_hook(self._save_gradient)
+    
+    def _save_activation(self, module, input, output):
+        self.activations = output.detach()
+    
+    def _save_gradient(self, module, grad_input, grad_output):
+        self.gradients = grad_output[0].detach()
+    
+    def generate(self, x, class_idx=None):
+        """Generate Grad-CAM heatmap"""
+        self.model.eval()
+        output = self.model(x)
+        
+        if class_idx is None:
+            class_idx = output.argmax(dim=1).item()
+        
+        self.model.zero_grad()
+        output[0, class_idx].backward(retain_graph=True)
+        
+        # Compute heatmap
+        if self.gradients is not None and self.activations is not None:
+            grads = self.gradients.mean(dim=[2, 3], keepdim=True)
+            cam = (grads * self.activations).sum(dim=1).squeeze()
+            cam = torch.relu(cam)
+            cam = cam.cpu().detach().numpy()
+            
+            if cam.max() > 0:
+                cam = (cam - cam.min()) / (cam.max() - cam.min())
+            return cam
+        
+        return np.zeros((x.shape[2] // 32, x.shape[3] // 32))
+
+def overlay_gradcam(frame_bgr, cam):
+    """Overlay Grad-CAM heatmap on frame"""
+    h, w = frame_bgr.shape[:2]
+    cam_resized = cv2.resize(cam, (w, h))
+    heatmap_colored = cv2.applyColorMap((cam_resized * 255).astype(np.uint8), cv2.COLORMAP_JET)
+    return cv2.addWeighted(frame_bgr, 0.55, heatmap_colored, 0.45, 0)
+
+def save_annotated_frames(video_path, raw_frames, fake_probabilities, predicted_class_names=None, gradcam_maps=None):
+    """Save annotated frames with face detection and Grad-CAM heatmap overlay"""
     import cv2
     
     # Create results folder
@@ -332,21 +423,27 @@ def save_annotated_frames(video_path, raw_frames, predictions):
     annotated_paths = []
     frame_details = []
     
-    for i, (raw_frame, pred_score) in enumerate(zip(raw_frames, predictions)):
+    for i, (raw_frame, fake_prob) in enumerate(zip(raw_frames, fake_probabilities)):
+        # Start with Grad-CAM overlay if available
+        if gradcam_maps is not None and i < len(gradcam_maps):
+            annotated = overlay_gradcam(raw_frame, gradcam_maps[i])
+        else:
+            annotated = raw_frame.copy()
+        
         # Detect faces
         gray = cv2.cvtColor(raw_frame, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(gray, 1.3, 5)
         
-        # Create annotated frame
-        annotated = raw_frame.copy()
         h, w = annotated.shape[:2]
         
-        label = "FAKE" if pred_score > 0.5 else "REAL"
-        confidence = float(pred_score * 100 if pred_score > 0.5 else (1 - pred_score) * 100)
+        is_fake = bool(float(fake_prob) >= 0.5)
+        label = "FAKE" if is_fake else "REAL"
+        confidence = float(max(float(fake_prob), 1.0 - float(fake_prob)) * 100)
+        pred_class = predicted_class_names[i] if predicted_class_names and i < len(predicted_class_names) else ("fake" if is_fake else "real")
         
         color = (0, 0, 255) if label == "FAKE" else (0, 255, 0)
         
-        # Draw face boxes
+        # Draw face boxes on top of heatmap
         for (x, y, fw, fh) in faces:
             cv2.rectangle(annotated, (x, y), (x+fw, y+fh), color, 4)
             text = f"{label} FACE"
@@ -360,7 +457,7 @@ def save_annotated_frames(video_path, raw_frames, predictions):
         
         # Add text
         cv2.putText(annotated, f"Frame {i+1}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-        cv2.putText(annotated, f"{label}: {confidence:.1f}%", (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+        cv2.putText(annotated, f"{label} | {pred_class} | {confidence:.1f}%", (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 3)
         
         # Save frame
         frame_filename = f"frame_{i+1:02d}_{label}.jpg"
@@ -372,8 +469,11 @@ def save_annotated_frames(video_path, raw_frames, predictions):
             "frame_num": i + 1,
             "label": label,
             "confidence": confidence,
-            "raw_score": float(pred_score),
-            "is_suspicious": bool(pred_score > 0.5),
+            "raw_score": float(fake_prob),
+            "pred_class": pred_class,
+            "prob_fake": float(fake_prob),
+            "prob_real": float(1.0 - float(fake_prob)),
+            "is_suspicious": is_fake,
             "faces_detected": int(len(faces))
         })
     
@@ -381,7 +481,7 @@ def save_annotated_frames(video_path, raw_frames, predictions):
 
 def analyze_video_with_model(video_path, model_key: str | None = None):
     """Analyze video using the selected model."""
-    global model, device, loaded_model_key
+    global model, device, loaded_model_key, loaded_model_architecture
 
     logger.info(f"🎬 Starting analysis for: {video_path}")
 
@@ -397,7 +497,7 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
         # Try to extract frames for analysis
         try:
             logger.info("📹 Extracting frames for demo mode...")
-            frames = extract_frames(video_path)
+            frames = extract_frames(video_path, num_frames=15)
             logger.info(f"✅ Extracted {len(frames)} frames")
             num_extracted_frames = len(frames)
         except Exception as e:
@@ -449,7 +549,7 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
     
     # Extract frames (these are RGB frames for processing)
     logger.info("📹 Extracting frames...")
-    frames = extract_frames(video_path)
+    frames = extract_frames(video_path, num_frames=15)
     logger.info(f"✅ Extracted {len(frames)} frames")
     
     # Extract raw frames again (BGR for OpenCV annotation)
@@ -463,8 +563,9 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
     
     frame_count = 0
     extracted = 0
-    num_frames = 3  # Reduce frames to lower memory footprint
-    frame_rate = 60  # Skip more frames to keep extraction light
+    num_frames = 15  # Match local report sampling
+    total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frame_rate = max(1, total_video_frames // num_frames) if total_video_frames > 0 else 30
     
     while extracted < num_frames:
         ret, frame = cap.read()
@@ -492,20 +593,50 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
     processed_frames = processed_frames.to(device)
     logger.info(f"✅ Preprocessed frames shape: {processed_frames.shape}")
     
-    # Run inference (guarded)
-    logger.info("🧠 Running model inference...")
+    # Initialize Grad-CAM
+    logger.info("📊 Initializing Grad-CAM for heatmap generation...")
+    gradcam = GradCAM(model)
+    gradcam_maps = []
+    
+    # Run inference and compute Grad-CAM for each frame
+    logger.info("🧠 Running model inference with Grad-CAM...")
     try:
         with torch.no_grad():
-            predictions = model(processed_frames)
-            predictions = predictions.cpu().numpy().flatten()
-        logger.info(f"✅ Inference complete. Predictions: {predictions}")
+            raw_outputs = model(processed_frames).cpu()
+
+        fake_probabilities, predicted_class_names, predicted_classes, class_probabilities = normalize_model_outputs(
+            raw_outputs,
+            loaded_model_architecture,
+        )
+        predictions = fake_probabilities.numpy().flatten()
+        logger.info(f"✅ Inference complete. Fake probabilities: {predictions}")
+        
+        # Compute Grad-CAM for each frame
+        logger.info("🔥 Computing Grad-CAM heatmaps for frames...")
+        for i, frame_tensor in enumerate(processed_frames):
+            try:
+                frame_batch = frame_tensor.unsqueeze(0).to(device)
+                cam = gradcam.generate(frame_batch)
+                gradcam_maps.append(cam)
+                logger.info(f"   ✅ Grad-CAM frame {i+1}/{len(processed_frames)}")
+            except Exception as e:
+                logger.warning(f"   ⚠️ Grad-CAM failed for frame {i+1}: {str(e)}")
+                gradcam_maps.append(None)
+        
+        logger.info(f"✅ Computed Grad-CAM for {len(gradcam_maps)} frames")
     except Exception as e:
         logger.error(f"❌ Inference failed: {type(e).__name__}: {e}", exc_info=True)
         raise
     
-    # Save annotated frames
-    output_folder, annotated_paths, frame_details = save_annotated_frames(video_path, raw_frames, predictions)
-    logger.info(f"✅ Saved {len(annotated_paths)} annotated frames to {output_folder}")
+    # Save annotated frames with Grad-CAM heatmaps
+    output_folder, annotated_paths, frame_details = save_annotated_frames(
+        video_path,
+        raw_frames,
+        predictions,
+        predicted_class_names=predicted_class_names,
+        gradcam_maps=gradcam_maps,
+    )
+    logger.info(f"✅ Saved {len(annotated_paths)} annotated frames with Grad-CAM to {output_folder}")
     
     # Log frame paths for debugging
     for i, path in enumerate(annotated_paths):
@@ -513,8 +644,8 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
     
     # Calculate metrics
     avg_prediction = float(np.mean(predictions))
-    is_deepfake = bool(avg_prediction > 0.5)
-    confidence_score = float(avg_prediction * 100 if is_deepfake else (1 - avg_prediction) * 100)
+    is_deepfake = bool(avg_prediction >= 0.5)
+    confidence_score = float(max(avg_prediction, 1.0 - avg_prediction) * 100)
     
     # Count suspicious frames
     suspicious_count = int(np.sum(predictions > 0.5))
@@ -544,7 +675,16 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
             "/model/analysis_results/" + os.path.relpath(p, os.path.join(os.path.dirname(__file__), "analysis_results")).replace("\\", "/")
             for p in annotated_paths
         ],
-        "output_folder": output_folder
+        "output_folder": output_folder,
+        "report_summary": {
+            "final_label": "FAKE" if is_deepfake else "REAL",
+            "final_confidence": round(confidence_score, 2),
+            "avg_prob_fake": round(avg_prediction, 4),
+            "fake_frames": fake_frames,
+            "real_frames": real_frames,
+            "total_frames": len(frames),
+            "frame_breakdown": frame_details,
+        }
     }
     
     # Build frame-level analysis for database storage
@@ -557,9 +697,9 @@ def analyze_video_with_model(video_path, model_key: str | None = None):
             {
                 "frame_number": idx,
                 "timestamp": float(idx / 30.0),  # Assuming 30 FPS
-                "is_fake": bool(predictions[idx] > 0.5),
-                "is_suspicious": bool(predictions[idx] > 0.5),
-                "confidence_score": float(predictions[idx] * 100 if predictions[idx] > 0.5 else (1 - predictions[idx]) * 100),
+                "is_fake": bool(predictions[idx] >= 0.5),
+                "is_suspicious": bool(predictions[idx] >= 0.5),
+                "confidence_score": float(max(float(predictions[idx]), 1.0 - float(predictions[idx])) * 100),
                 "analysis_details": frame_details[idx] if idx < len(frame_details) else {}
             }
             for idx in range(len(frames))
