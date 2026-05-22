@@ -362,11 +362,20 @@ class GradCAM:
         self.gradients = None
         self.activations = None
         
-        # Hook into the last stage of ConvNeXt
+        # Hook into the last stage of ConvNeXt - check both model and backbone
+        target = None
         if hasattr(model, 'stages'):
             target = model.stages[-1]
+        elif hasattr(model, 'backbone') and hasattr(model.backbone, 'stages'):
+            target = model.backbone.stages[-1]
+        
+        if target is not None:
             target.register_forward_hook(self._save_activation)
             target.register_full_backward_hook(self._save_gradient)
+        else:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"⚠️ Could not find stages in model or model.backbone!")
     
     def _save_activation(self, module, input, output):
         self.activations = output.detach()
